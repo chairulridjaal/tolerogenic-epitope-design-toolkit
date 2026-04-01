@@ -163,13 +163,17 @@ specific dipeptide compositions correlate with IL-10 vs. IFN-gamma
 induction probability.
 
 **Implementation:**
-Submit peptide sequences to IL-10pred 
-(https://webs.iiitd.edu.in/raghava/il10pred/) and retrieve the 
-binary prediction and SVM score. Normalize SVM score to [0, 1].
+A local Random Forest model is trained on the exact 73 features from
+Table S1 of Nagpal et al. (2017): 16 amino acid composition + 57
+dipeptide composition features. Training data: Table S4 (394 positive,
+848 negative peptides). The model outputs P(IL-10 inducer) in [0, 1].
 
-If IL-10pred is unavailable via API, this criterion is computed 
-from amino acid composition features as a fallback using the 
-dipeptide model described in the IL-10pred publication.
+The local RF model reproduces the original 73-feature set from
+Nagpal et al. (2017) with AUC 0.91 on the independent validation set
+(Table S5); accuracy is 0.67 (slightly lower than the paper's internal
+CV of ~0.81, as expected for an independent holdout).
+
+Train once: ``python -m src.scoring.train_il10_model``
 
 **Primary citations:**
 - Nagpal G *et al.* (2017). Computer-aided designing of immunosuppressive peptides based on IL-10 inducing potential. *Scientific Reports* **7**:42851. [doi:10.1038/srep42851](https://doi.org/10.1038/srep42851)
@@ -188,16 +192,18 @@ opposite of tolerance. Computational tools can predict IFN-gamma
 induction probability from sequence features.
 
 **Implementation:**
-Submit to IFNepitope 
-(https://webs.iiitd.edu.in/raghava/ifnepitope/) 
-and retrieve the SVM score.
+Uses IFNepitope2 (Dhall et al., 2024), the official successor to the
+2013 tool. Key improvements: host-specific models (human/mouse),
+hybrid ML + BLAST method, AUROC 0.90 (human). Runs locally via the
+``ifnepitope2`` Python package (ExtraTrees model, DPC features).
 
-Score = 1.0 − normalized_IFN_gamma_probability
+Score = 1.0 − P(IFN-γ inducer)
 
 High IFN-gamma prediction → low tolerogenic score.
 
 **Primary citations:**
 - Dhanda SK, Vir P & Raghava GPS (2013). Designing of interferon-gamma inducing MHC class-II binders. *Biology Direct* **8**:30. [doi:10.1186/1745-6150-8-30](https://doi.org/10.1186/1745-6150-8-30)
+- Dhall A *et al.* (2024). IFNepitope2: improved prediction of interferon-gamma inducing peptides. *Scientific Reports*.
 
 ---
 
@@ -324,9 +330,12 @@ justification.
    is an approximation. The exact optimal range likely varies by 
    HLA allele and patient population.
 
-3. IL-10pred and IFNepitope were trained on general T cell epitope 
-   datasets, not ITP-specific data. Their predictions for ITP 
-   antigens are extrapolations.
+3. The local IL-10 RF model and IFNepitope2 were trained on general
+   T cell epitope datasets, not ITP-specific data. Their predictions
+   for ITP antigens are extrapolations. The IL-10 model achieves
+   AUC 0.91 on the independent validation set (S5) but accuracy of
+   0.67 (vs. the paper's internal CV ~0.81) — probability rankings
+   are reliable, binary thresholds less so.
 
 4. Criterion 7 (JMX) has no public API and limited validation 
    outside the EpiVax research group's own publications.

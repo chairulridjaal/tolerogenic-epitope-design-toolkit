@@ -28,7 +28,7 @@
             "position_start": 331,
             "position_end": 345,
             "sequence": "WNIQNPWSIKRKRK",
-            "length": 15,
+            "length": 14,
             "aa_range": "331-345",
             "tolerogenic_validated": false,
             "notes": "RK wrapper added for solubility in original study"
@@ -78,7 +78,7 @@
             "position_start": 711,
             "position_end": 725,
             "sequence": "NPIYKSAVTTVVNP",
-            "length": 15,
+            "length": 14,
             "aa_range": "711-725",
             "tolerogenic_validated": true,
             "validation_model": "HLA-DR15 humanized mice",

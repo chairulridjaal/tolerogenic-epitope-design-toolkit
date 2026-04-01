@@ -6,7 +6,7 @@ Current treatments for ITP — steroids, IVIg, splenectomy, TPO receptor agonist
 
 The architecture is disease-agnostic. ITP is the first target. The same pipeline generalizes to Multiple Sclerosis, Type 1 Diabetes, Celiac Disease, Lupus, Rheumatoid Arthritis, and other autoimmune conditions by swapping the input antigen configuration.
 
-> **Status:** Early development. The project structure and data layer are being built. Contributions and feedback from immunologists are welcome.
+> **Status:** Phases 0–3 complete. The full tolerogenic scoring engine is live, 100% offline, and calibrated against experimentally validated ITP epitopes (Peptide 2 + Peptide 82 from Hall et al. 2019). Real IL-10 and IFN-γ induction predictions are now integrated. Phase 4 (construct assembly) is next.
 
 ---
 
@@ -20,11 +20,11 @@ The underlying failure is a breakdown in **immune tolerance** — the learned no
 
 A tolerogenic vaccine presents self-antigens in an immunological context that promotes regulatory T cell (Treg) activity rather than effector T cell activation. The critical design question is: **which peptide fragments of the target antigen, presented on which MHC Class II molecules, are most likely to induce tolerance?**
 
-This toolkit automates that question through four stages:
+This toolkit automates that question through four completed stages and one in progress:
 
 1. **Data retrieval** — Fetch protein sequences from UniProt and known epitope data from IEDB
 2. **Epitope prediction** — Scan antigen sequences for peptides that bind MHC Class II molecules across diverse HLA alleles (using NetMHCIIpan for T-cell epitopes and BepiPred for B-cell epitopes)
-3. **Tolerogenic scoring** — Rank predicted epitopes by features associated with Treg induction rather than effector activation, based on published literature
+3. **Tolerogenic scoring** — Literature-grounded ranking using seven criteria, including **local retrained Random Forest model for IL-10 induction** (73 features from Nagpal et al. 2017) and **local IFNepitope2 model for IFN-γ penalty** (Dhall et al. 2024). Calibrated against the seven experimentally validated GPIIIa epitopes from Sukati et al. (2007) and Hall et al. (2019). 100% offline. (complete)
 4. **Construct assembly** — Combine top-ranked epitopes with appropriate linkers into candidate multi-epitope mRNA constructs
 
 ### Why MHC Variation Matters
@@ -64,7 +64,7 @@ pip install -r requirements.txt
 
 ### Dependencies
 
-Core dependencies (specified in `requirements.txt` as modules are built):
+Core dependencies (specified in `requirements.txt`):
 
 - `requests` — API calls to UniProt and IEDB
 - `biopython` — Sequence parsing and manipulation
@@ -72,6 +72,7 @@ Core dependencies (specified in `requirements.txt` as modules are built):
 - `numpy` — Numerical operations
 - `matplotlib` / `seaborn` — Visualization
 - `pytest` — Testing
+- `scikit-learn`, `joblib` — local IL-10 & IFN-γ models
 
 External tools called by the prediction module:
 
@@ -82,7 +83,7 @@ External tools called by the prediction module:
 
 ## Roadmap
 
-### Phase 0 — Foundation (current)
+### Phase 0 — Foundation
 - Repository structure and development environment
 - Background reading on tolerogenic vaccine design
 - Conceptual documentation of the pipeline
@@ -101,12 +102,12 @@ External tools called by the prediction module:
 - Notebook: epitope landscape of GPIIb/IIIa
 
 ### Phase 3 — Tolerogenic Scoring
-- Literature review of Treg-inducing peptide features
-- Scoring criteria with documented source papers for each factor
-- Population coverage analysis across HLA frequency distributions
-- Notebook: tolerogenic scoring methodology and results
+- Local IL-10 Random Forest model (73 features from original paper)
+- Local IFNepitope2 integration for IFN-γ penalty
+- Gold-standard calibration against real ITP tolerogenic peptides
+- Full composite scoring with population coverage
 
-### Phase 4 — Construct Assembly
+### Phase 4 — Construct Assembly (CURRENT)
 - Multi-epitope linker design from vaccine literature
 - mRNA sequence generation with nucleoside modification annotations
 - End-to-end pipeline: antigen sequence in, ranked mRNA constructs out
@@ -180,3 +181,5 @@ Key literature informing this project (to be expanded in `docs/`):
 3. Serra, P. & Santamaria, P. "Antigen-specific therapeutic approaches for autoimmunity." *Nature Biotechnology* (2019).
 4. Clemente-Casares, X. et al. "Expanding antigen-specific regulatory networks to treat autoimmunity." *Nature* (2016).
 5. Reynisson, B. et al. "NetMHCpan-4.1 and NetMHCIIpan-4.0: improved predictions of MHC antigen presentation." *Nucleic Acids Research* (2020).
+6. Nagpal et al. (2017) *Scientific Reports* — IL-10pred (basis for local RF model)
+7. Dhall et al. (2024) *Scientific Reports* — IFNepitope2

@@ -1,5 +1,8 @@
 # Downloaded data - regenerate with src/data/ connectors
 data/raw/*
+!data/raw/S1.csv
+!data/raw/S4.csv
+!data/raw/S5.csv
 data/processed/*
 !data/processed/itp_gold_standard.json
 
