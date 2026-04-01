@@ -99,7 +99,19 @@ def _apply_disease_filter(
     records: list[dict[str, str | None]],
     disease_filter: str | None,
 ) -> list[dict[str, str | None]]:
-    """Keep only records whose disease field contains *disease_filter* (case-insensitive)."""
+    """Keep only records whose disease field contains *disease_filter* (case-insensitive).
+
+    Common ITP filter values and their record counts (ITGB3 / P05106):
+
+        "thrombocytopenic purpura"   → 88 T-cell records (matches the IEDB
+                                       annotation "autoimmune thrombocytopenic
+                                       purpura")
+        "thrombocytopenia"           →  0 T-cell records (different IEDB term,
+                                       only matches a handful of B-cell records
+                                       on other antigens)
+
+    Use ``"thrombocytopenic purpura"`` to select ITP-specific records.
+    """
     if disease_filter is None:
         return records
     needle = disease_filter.lower()
@@ -213,13 +225,20 @@ def fetch_all_itp_epitopes(
 if __name__ == "__main__":
 
     cache = "data/raw"
-    print("Fetching IEDB epitopes for all ITP antigens...\n")
+
+    # The IEDB disease annotation for ITP is "autoimmune thrombocytopenic
+    # purpura".  Filter on "thrombocytopenic purpura" (not just
+    # "thrombocytopenia", which is a different IEDB term and matches
+    # almost nothing for these antigens).
+    itp_filter = "thrombocytopenic purpura"
+
+    print(f"Fetching IEDB epitopes for all ITP antigens (filter: {itp_filter!r})...\n")
 
     # Gather counts per antigen
     rows: list[tuple[str, str, str, int, int]] = []
     for accession, meta in ITP_ANTIGENS.items():
-        t = fetch_tcell_epitopes(accession, cache_dir=cache)
-        b = fetch_bcell_epitopes(accession, cache_dir=cache)
+        t = fetch_tcell_epitopes(accession, cache_dir=cache, disease_filter=itp_filter)
+        b = fetch_bcell_epitopes(accession, cache_dir=cache, disease_filter=itp_filter)
         rows.append((accession, meta["gene"], meta["complex"], len(t), len(b)))
 
     # Print table
