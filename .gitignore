@@ -1,6 +1,7 @@
 # Downloaded data - regenerate with src/data/ connectors
-data/raw/
-data/processed/
+data/raw/*
+data/processed/*
+!data/processed/itp_gold_standard.json
 
 # Python
 __pycache__/
