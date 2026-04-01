@@ -6,7 +6,7 @@ Current treatments for ITP — steroids, IVIg, splenectomy, TPO receptor agonist
 
 The architecture is disease-agnostic. ITP is the first target. The same pipeline generalizes to Multiple Sclerosis, Type 1 Diabetes, Celiac Disease, Lupus, Rheumatoid Arthritis, and other autoimmune conditions by swapping the input antigen configuration.
 
-> **Status:** Phases 0–3 complete. The full tolerogenic scoring engine is live, 100% offline, and calibrated against experimentally validated ITP epitopes (Peptide 2 + Peptide 82 from Hall et al. 2019). Real IL-10 and IFN-γ induction predictions are now integrated. Phase 4 (construct assembly) is next.
+> **Status:** Phases 0–4 complete. The full pipeline — from antigen sequence to codon-optimized mRNA construct — is live, 100% offline, and calibrated against experimentally validated ITP epitopes. First prototype constructs generated (see `docs/itp_prototype_v1_report.md`).
 
 ---
 
@@ -20,12 +20,12 @@ The underlying failure is a breakdown in **immune tolerance** — the learned no
 
 A tolerogenic vaccine presents self-antigens in an immunological context that promotes regulatory T cell (Treg) activity rather than effector T cell activation. The critical design question is: **which peptide fragments of the target antigen, presented on which MHC Class II molecules, are most likely to induce tolerance?**
 
-This toolkit automates that question through four completed stages and one in progress:
+This toolkit automates that question through four stages:
 
 1. **Data retrieval** — Fetch protein sequences from UniProt and known epitope data from IEDB
-2. **Epitope prediction** — Scan antigen sequences for peptides that bind MHC Class II molecules across diverse HLA alleles (using NetMHCIIpan for T-cell epitopes and BepiPred for B-cell epitopes)
-3. **Tolerogenic scoring** — Literature-grounded ranking using seven criteria, including **local retrained Random Forest model for IL-10 induction** (73 features from Nagpal et al. 2017) and **local IFNepitope2 model for IFN-γ penalty** (Dhall et al. 2024). Calibrated against the seven experimentally validated GPIIIa epitopes from Sukati et al. (2007) and Hall et al. (2019). 100% offline. (complete)
-4. **Construct assembly** — Combine top-ranked epitopes with appropriate linkers into candidate multi-epitope mRNA constructs
+2. **Epitope prediction** — Scan antigen sequences for peptides that bind MHC Class II molecules across 12 HLA alleles via the IEDB NetMHCIIpan API
+3. **Tolerogenic scoring** — Rank candidates using seven literature-grounded criteria: MHC binding zone, HLA promiscuity, ITP proximity, IL-10 induction (local RF model), IFN-γ penalty (local IFNepitope2 model), solubility (GRAVY), and human self-mimicry (JMX proxy via proteome 9-mer lookup). Calibrated against validated GPIIIa epitopes from Sukati et al. (2007) and Hall et al. (2019). 100% offline.
+4. **Construct assembly** — Assemble top-ranked epitopes with GPGPG/AAY linkers, apply B-cell safety filtering, generate codon-optimized mRNA with manufacturing annotations (m1Ψ, CleanCap, LNP formulation)
 
 ### Why MHC Variation Matters
 
@@ -39,14 +39,15 @@ Different people carry different HLA alleles, which means different peptides fro
 tolerogenic-epitope-design-toolkit/
 ├── src/
 │   ├── data/           # API connectors for UniProt and IEDB
-│   ├── prediction/     # Epitope prediction wrappers (NetMHCIIpan, BepiPred)
-│   ├── scoring/        # Tolerogenic scoring module
-│   └── assembly/       # Multi-epitope mRNA construct builder
+│   ├── prediction/     # Peptide scanning + IEDB MHC-II binding wrapper
+│   ├── scoring/        # Tolerogenic scoring engine + IL-10 model training
+│   └── assembly/       # Construct builder, JMX index, mRNA generation
 ├── data/
-│   ├── raw/            # Downloaded sequences and epitope databases
-│   └── processed/      # Cleaned tables, parsed binding data
-├── notebooks/          # Analysis notebooks for each pipeline stage
-├── docs/               # Background reading, design decisions, references
+│   ├── raw/            # Downloaded sequences, epitope databases, training CSVs
+│   ├── processed/      # Scored peptides, constructs, cached predictions
+│   └── models/         # Trained IL-10 RF model, JMX 9-mer index
+├── notebooks/          # Analysis notebooks (01_data_exploration, 02_prediction)
+├── docs/               # Scoring criteria, prototype report, design decisions
 ├── tests/              # Unit and integration tests
 ├── requirements.txt
 └── README.md
@@ -60,6 +61,14 @@ cd tolerogenic-epitope-design-toolkit
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
+pip install --no-deps ifnepitope2  # IFN-γ model (--no-deps avoids pinned sklearn conflict)
+```
+
+### One-Time Setup
+
+```bash
+python -m src.scoring.train_il10_model    # Train local IL-10 RF model (~5 sec)
+python -m src.assembly.build_jmx_index    # Download human proteome + build 9-mer index (~2 min)
 ```
 
 ### Dependencies
@@ -67,17 +76,15 @@ pip install -r requirements.txt
 Core dependencies (specified in `requirements.txt`):
 
 - `requests` — API calls to UniProt and IEDB
-- `biopython` — Sequence parsing and manipulation
 - `pandas` — Tabular data handling
 - `numpy` — Numerical operations
-- `matplotlib` / `seaborn` — Visualization
-- `pytest` — Testing
-- `scikit-learn`, `joblib` — local IL-10 & IFN-γ models
+- `scikit-learn`, `joblib` — Local IL-10 and IFN-γ models
+- `matplotlib` — Visualization (notebooks)
+- `ifnepitope2` — IFNepitope2 ExtraTrees model (install with `--no-deps`)
 
-External tools called by the prediction module:
+External APIs used by the prediction module (called automatically, no local install needed):
 
-- [NetMHCIIpan 4.3](https://services.healthtech.dtu.dk/services/NetMHCIIpan-4.3/) — MHC Class II binding prediction (requires academic license)
-- [BepiPred 3.0](https://services.healthtech.dtu.dk/services/BepiPred-3.0/) — B-cell epitope prediction
+- [IEDB MHC-II Prediction API](https://tools.iedb.org/mhcii/) — NetMHCIIpan binding predictions (results cached locally after first run)
 
 ---
 
@@ -107,13 +114,17 @@ External tools called by the prediction module:
 - Gold-standard calibration against real ITP tolerogenic peptides
 - Full composite scoring with population coverage
 
-### Phase 4 — Construct Assembly (CURRENT)
-- Multi-epitope linker design from vaccine literature
-- mRNA sequence generation with nucleoside modification annotations
-- End-to-end pipeline: antigen sequence in, ranked mRNA constructs out
-- Notebook: full pipeline demonstration
+### Phase 4 — Construct Assembly
+- Multi-epitope construct assembly with GPGPG (flexible) and AAY (rigid) linkers
+- JMX proxy: human proteome 9-mer self-mimicry scoring (Criterion 7)
+- B-cell epitope safety filter (Parker hydrophilicity scale)
+- Construct-level scoring with multi-epitope and spatial clustering bonuses
+- Human codon-optimized mRNA generation (Kozak 5'UTR, beta-globin 3'UTR, polyA-120)
+- Experimental priority tiering (Tier 1/2/3)
+- Manufacturing annotations (m1Psi, CleanCap, dsRNA-depleted LNP)
+- First prototype: `docs/itp_prototype_v1_report.md`
 
-### Phase 5 — Generalization
+### Phase 5 — Generalization (next)
 - Add a second autoimmune disease (e.g., Multiple Sclerosis with MBP, PLP, MOG antigens) to validate disease-agnostic architecture
 - Streamlit web interface for non-programmers
 - Outreach to immunology researchers for collaboration
@@ -128,6 +139,7 @@ External tools called by the prediction module:
 | Integrin alpha-IIb (GPIIb) | P08514 | Platelet adhesion and aggregation | Primary autoantibody target in most ITP cases |
 | Integrin beta-3 (GPIIIa) | P05106 | Forms heterodimer with GPIIb | Primary autoantibody target in most ITP cases |
 | Glycoprotein Ib alpha (GPIb-alpha) | P07359 | Initial platelet adhesion to vessel walls | Secondary autoantibody target |
+| Glycoprotein Ib beta (GPIb-beta) | P13224 | Part of GPIb-IX-V receptor complex | Secondary autoantibody target |
 | Glycoprotein IX | P14770 | Part of GPIb-IX-V receptor complex | Secondary autoantibody target |
 | Glycoprotein V | P40197 | Part of GPIb-IX-V receptor complex | Secondary autoantibody target |
 
@@ -161,7 +173,7 @@ For readers unfamiliar with the immunology:
 
 ## Contributing
 
-This project is in early development. If you are an immunologist, computational biologist, or developer interested in tolerogenic vaccine design, please open an issue or reach out.
+This project is in active development. If you are an immunologist, computational biologist, or developer interested in tolerogenic vaccine design, please open an issue or reach out.
 
 Areas where collaboration would be especially valuable:
 - Validation of tolerogenic scoring criteria against experimental data
@@ -174,12 +186,15 @@ TBD
 
 ## References
 
-Key literature informing this project (to be expanded in `docs/`):
+Key literature informing this project:
 
 1. Provan, D. et al. "International consensus report on the investigation and management of primary immune thrombocytopenia." *Blood* (2010).
 2. Cines, D.B. & Bussel, J.B. "How I treat idiopathic thrombocytopenic purpura (ITP)." *Blood* (2005).
 3. Serra, P. & Santamaria, P. "Antigen-specific therapeutic approaches for autoimmunity." *Nature Biotechnology* (2019).
 4. Clemente-Casares, X. et al. "Expanding antigen-specific regulatory networks to treat autoimmunity." *Nature* (2016).
 5. Reynisson, B. et al. "NetMHCpan-4.1 and NetMHCIIpan-4.0: improved predictions of MHC antigen presentation." *Nucleic Acids Research* (2020).
-6. Nagpal et al. (2017) *Scientific Reports* — IL-10pred (basis for local RF model)
-7. Dhall et al. (2024) *Scientific Reports* — IFNepitope2
+6. Nagpal, G. et al. "Computer-aided designing of immunosuppressive peptides based on IL-10 inducing potential." *Scientific Reports* (2017).
+7. Dhall, A. et al. "IFNepitope2: improved prediction of interferon-gamma inducing peptides." *Scientific Reports* (2024).
+8. Sukati, H. et al. "Mapping helper T-cell epitopes on platelet membrane glycoprotein IIIa." *Blood* (2007).
+9. Hall, L.S. et al. "Combination peptide immunotherapy suppresses antibody and helper T-cell responses to GPIIb/IIIa in HLA-transgenic mice." *Haematologica* (2019).
+10. Moise, L. et al. "The two-faced T cell epitope: examining the host-microbe interface with JanusMatrix." *Human Vaccines & Immunotherapeutics* (2013).

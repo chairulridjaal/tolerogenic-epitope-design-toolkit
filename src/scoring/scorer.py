@@ -559,8 +559,8 @@ def score_all_peptides(
     -------
     DataFrame with columns: ``peptide``, ``mhc_zone``,
     ``hla_promiscuity``, ``itp_proximity``, ``il10``, ``ifng``,
-    ``solubility``, ``jmx``, ``composite_score``.  Sorted descending
-    by ``composite_score``.
+    ``solubility``, ``jmx``, ``bcell_risk``, ``composite_score``.
+    Sorted descending by ``composite_score``.
     """
     if weights is None:
         weights = DEFAULT_WEIGHTS
@@ -568,6 +568,13 @@ def score_all_peptides(
     # --- Batch API calls (once for all peptides) ---------------------------
     il10_scores = score_il10_local(peptides, cache_dir=cache_dir)
     ifng_scores = score_ifng_epitope(peptides, cache_dir=cache_dir)
+
+    # --- JMX proxy (import here to avoid circular imports) -----------------
+    try:
+        from src.assembly.construct_builder import score_jmx_proxy, score_bcell_risk
+        jmx_available = True
+    except Exception:
+        jmx_available = False
 
     # --- Per-peptide scoring -----------------------------------------------
     rows: list[dict[str, Any]] = []
@@ -578,7 +585,13 @@ def score_all_peptides(
         il10 = il10_scores.get(pep, 0.5)
         ifng = ifng_scores.get(pep, 0.5)
         sol = score_gravy(pep)
-        jmx = 0.5  # neutral — no public API
+
+        if jmx_available:
+            jmx = score_jmx_proxy(pep, gold_standard=gold_standard)
+            bcell_risk, bcell_penalty = score_bcell_risk(pep)
+        else:
+            jmx = 0.5
+            bcell_risk, bcell_penalty = False, 0.0
 
         composite = (
             weights["mhc_zone"] * mhc
@@ -599,6 +612,7 @@ def score_all_peptides(
             "ifng": round(ifng, 4),
             "solubility": round(sol, 4),
             "jmx": round(jmx, 4),
+            "bcell_risk": bcell_risk,
             "composite_score": round(composite, 4),
         })
 
@@ -758,3 +772,32 @@ if __name__ == "__main__":
     out_path = Path("data/processed/itgb3_tolerogenic_scores.csv")
     scores_df.to_csv(out_path, index=False)
     print(f"\nFull results saved to {out_path}")
+
+    # 9. Generate mRNA constructs (Phase 4)
+    print("\n" + "=" * 60)
+    print("PHASE 4 — mRNA CONSTRUCT ASSEMBLY")
+    print("=" * 60)
+
+    try:
+        from src.assembly.construct_builder import generate_mrna_constructs
+        construct_df, peptide_df = generate_mrna_constructs(
+            top_n=10,
+            scores_path=out_path,
+            predictions_path=pred_path,
+            gold_standard_path=gs_path,
+        )
+
+        print("\nTop constructs:\n")
+        for _, row in construct_df.iterrows():
+            print(f"  {row['construct_id']}: {row['n_epitopes']} epitopes, "
+                  f"{row['construct_length_aa']} aa, {row['mrna_length_nt']} nt, "
+                  f"score={row['construct_score']:.3f}")
+
+        print(f"\nPeptide details:\n")
+        for _, row in peptide_df.iterrows():
+            risk = "B-CELL RISK" if row["bcell_risk"] else ""
+            print(f"  T{row['experimental_tier']} {row['peptide']:<18} "
+                  f"score={row['composite_score']:.3f} "
+                  f"jmx={row['jmx_proxy']:.2f} {risk}")
+    except Exception as exc:
+        print(f"  Construct assembly skipped: {exc}")

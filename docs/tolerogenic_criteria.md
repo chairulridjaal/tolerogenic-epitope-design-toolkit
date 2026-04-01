@@ -256,18 +256,94 @@ related to why Tregitopes (which are highly conserved across human
 IgG molecules) are so potent at inducing tolerance.
 
 **Implementation:**
-Submit to JanusMatrix web server 
-(https://janusmatrix.essentialfacts.com) and retrieve JMX score. 
-Normalize to [0, 1] based on the score distribution across all 
-candidate peptides.
+Local JMX proxy using a human proteome 9-mer index. Built once by
+``python -m src.assembly.build_jmx_index``, which downloads the
+Swiss-Prot reviewed human proteome (~20,400 proteins, 11.4M residues)
+and extracts all ~10.4M unique 9-mers into a compressed pickle.
 
-Note: JanusMatrix has no public API. This criterion is flagged as 
-manually computable for exploratory use, with a fallback of 
-sequence identity to the human UniProt reviewed proteome using 
-BLAST or local alignment.
+For each candidate 15-mer peptide, generate all 7 possible 9-mer
+windows and check how many appear in the human proteome set:
+
+    JMX proxy score = (9-mers found in human proteome) / (total 9-mers)
+
+Score of 1.0 means all 9-mer windows appear in human self-proteins
+(high Treg engagement likelihood). Score of 0.0 means no windows
+match (foreign-like, likely to trigger effector response).
+
+This is a simplified proxy for the full JanusMatrix analysis, which
+also considers HLA-restricted TCR-facing residues. The 9-mer overlap
+approach captures the most important signal — sequence identity to
+self — without requiring the proprietary JMX web server.
 
 **Primary citations:**
 - Moise L *et al.* (2013). The two-faced T cell epitope: examining the host-microbe interface with JanusMatrix. *Human Vaccines & Immunotherapeutics* **9**(7):1577–1586. [doi:10.4161/hv.24615](https://doi.org/10.4161/hv.24615)
+
+---
+
+## B-Cell Epitope Safety Filter
+
+**Confidence: Medium**
+
+**Biological rationale:**
+A tolerogenic peptide vaccine must avoid triggering antibody responses
+against itself. If the construct contains linear B-cell epitopes,
+the patient's immune system may produce antibodies that neutralize
+the vaccine peptides before they can induce Treg activity. This is
+a safety/efficacy filter, not a tolerogenic criterion per se.
+
+**Implementation:**
+Uses the Parker hydrophilicity scale (Parker et al., 1986) with a
+sliding 7-residue window. If any window's average hydrophilicity
+exceeds a threshold of 4.0, the peptide is flagged as ``bcell_risk=True``
+and receives a -0.15 penalty to the final adjusted score.
+
+This is a conservative approximation. Hydrophilic, surface-exposed
+regions are the primary determinants of linear B-cell epitope binding.
+A full structural prediction (BepiPred-3.0) would be more accurate
+but requires a standalone installation not currently available via pip.
+
+**Primary citations:**
+- Parker JMR, Guo D & Hodges RS (1986). New hydrophilicity scale derived from high-performance liquid chromatography peptide retention data. *Biochemistry* **25**:5425–5432.
+
+---
+
+## Construct-Level Scoring
+
+**Confidence: Medium**
+
+**Biological rationale:**
+A multi-epitope construct's tolerogenic potential is not simply the
+average of its component peptides. Constructs with multiple epitopes
+from the same target antigen benefit from focused bystander
+suppression. Spatial clustering of epitopes from the same protein
+region may enhance local Treg activity. Conversely, junction regions
+(where peptides are joined by linkers) can create unintended
+MHC-binding neo-epitopes that trigger effector responses.
+
+**Implementation:**
+The construct-level score starts from the average composite score
+of all component peptides, then applies:
+
+- **+0.2 bonus**: if ≥3 epitopes from the same source antigen
+  (focused bystander suppression)
+- **+0.1 bonus**: if ≥2 component peptides overlap with gold-standard
+  positions (spatial clustering within the target protein)
+- **-0.15 penalty** per junction: if any 15-mer spanning a linker
+  junction matches a known strong binder (percentile rank < 2%) from
+  the Phase 2 prediction cache
+
+The score is clamped to [0, 1].
+
+Linker choices:
+- **GPGPG** (default): flexible glycine-proline linker, minimizes
+  junctional epitope formation, widely used in multi-epitope vaccine
+  designs
+- **AAY**: rigid linker, favours cathepsin processing, alternative
+  for constructs requiring defined cleavage sites
+
+**Primary citations:**
+- Arai R *et al.* (2001). Design of the linkers which effectively separate domains of a bifunctional fusion protein. *Protein Engineering* **14**:529–532.
+- Livingston BD *et al.* (2002). A rational strategy to design multiepitope immunogens based on multiple Th lymphocyte epitopes. *J Immunol* **168**:5499–5506.
 
 ---
 
