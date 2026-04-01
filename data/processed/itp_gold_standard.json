@@ -16,73 +16,73 @@
             "id": "Peptide_2",
             "position_start": 6,
             "position_end": 20,
-            "sequence": "TTRGVSSCQQCLAVS",
+            "sequence": "GDCNCTKDDSVMCIG",
             "length": 15,
             "aa_range": "6-20",
             "tolerogenic_validated": true,
             "validation_model": "HLA-DR15 humanized mice",
-            "notes": "Used in Hall et al. 2019 tolerogenic combination therapy"
+            "notes": "Confirmed Treg induction, autoantibody suppression"
         },
         {
             "id": "Peptide_44",
             "position_start": 331,
             "position_end": 345,
-            "sequence": "GVLSMDSSNVLQLIV",
-            "length": 15,
+            "sequence": "WNIQNPWSIKRKRK",
+            "length": 14,
             "aa_range": "331-345",
             "tolerogenic_validated": false,
-            "notes": "From Sukati et al. 2007"
+            "notes": "RK wrapper added for solubility in original study"
         },
         {
-            "id": "Peptide_47",
+            "id": "Peptide_48",
             "position_start": 361,
             "position_end": 375,
-            "sequence": "DLPEELSLSFNATCL",
+            "sequence": "SYWNFGNNVTLHKKS",
             "length": 15,
             "aa_range": "361-375",
             "tolerogenic_validated": false,
-            "notes": "From Sukati et al. 2007"
+            "notes": ""
         },
         {
-            "id": "Peptide_53",
+            "id": "Peptide_56",
             "position_start": 421,
             "position_end": 435,
-            "sequence": "FKDSLIVQVTFDCDC",
+            "sequence": "TEEKIQLIVQANIDQ",
             "length": 15,
             "aa_range": "421-435",
             "tolerogenic_validated": false,
-            "notes": "From Sukati et al. 2007"
+            "notes": ""
         },
         {
             "id": "Peptide_70",
             "position_start": 591,
             "position_end": 605,
-            "sequence": "PGSYGDTCEKCPTCP",
+            "sequence": "GCVYIEDEVHRCYGR",
             "length": 15,
             "aa_range": "591-605",
             "tolerogenic_validated": false,
-            "notes": "From Sukati et al. 2007"
+            "notes": ""
         },
         {
             "id": "Peptide_77",
             "position_start": 661,
             "position_end": 675,
-            "sequence": "DDCVVRFQYYEDSSG",
+            "sequence": "CRKSLVSSFAECRTF",
             "length": 15,
             "aa_range": "661-675",
             "tolerogenic_validated": false,
-            "notes": "From Sukati et al. 2007"
+            "notes": ""
         },
         {
             "id": "Peptide_82",
             "position_start": 711,
             "position_end": 725,
-            "sequence": "ALLIWKLLITIHDRK",
-            "length": 15,
+            "sequence": "NPIYKSAVTTVVNP",
+            "length": 14,
             "aa_range": "711-725",
             "tolerogenic_validated": true,
             "validation_model": "HLA-DR15 humanized mice",
-            "notes": "Hall et al. 2019 used RK-ALLIWKLLITIHDRKRK for solubility in experiments"
+            "notes": "Primary tolerogenic candidate, often RK-flanked in studies"
         }
     ]
 }
