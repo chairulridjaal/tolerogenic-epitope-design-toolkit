@@ -50,12 +50,30 @@ PARKER_HYDROPHILICITY: dict[str, float] = {
     "S":  6.5, "T":  5.2, "W": -10.0, "Y": -1.9, "V": -3.7,
 }
 
-# Human-optimized codon table (most frequent codon per amino acid).
-HUMAN_CODONS: dict[str, str] = {
-    "A": "GCC", "R": "CGG", "N": "AAC", "D": "GAC", "C": "TGC",
-    "E": "GAG", "Q": "CAG", "G": "GGC", "H": "CAC", "I": "ATC",
-    "L": "CTG", "K": "AAG", "M": "ATG", "F": "TTC", "P": "CCC",
-    "S": "AGC", "T": "ACC", "W": "TGG", "Y": "TAC", "V": "GTG",
+# Human codon usage frequencies (per thousand) from the Kazusa Codon Usage
+# Database for Homo sapiens (CDS: 93487 sequences).
+# Each amino acid maps to a dict of {codon: frequency_per_thousand}.
+HUMAN_CODON_TABLE: dict[str, dict[str, float]] = {
+    "A": {"GCT": 18.4, "GCC": 27.7, "GCA": 15.8, "GCG":  7.4},
+    "R": {"CGT":  4.5, "CGC": 10.4, "CGA":  6.2, "CGG": 11.4, "AGA": 12.2, "AGG": 12.0},
+    "N": {"AAT": 17.0, "AAC": 19.1},
+    "D": {"GAT": 21.8, "GAC": 25.1},
+    "C": {"TGT": 10.6, "TGC": 12.6},
+    "E": {"GAA": 29.0, "GAG": 39.6},
+    "Q": {"CAA": 12.3, "CAG": 34.2},
+    "G": {"GGT": 10.8, "GGC": 22.2, "GGA": 16.5, "GGG": 16.5},
+    "H": {"CAT": 10.9, "CAC": 15.1},
+    "I": {"ATT": 16.0, "ATC": 20.8, "ATA":  7.5},
+    "L": {"TTA":  7.7, "TTG": 12.9, "CTT": 13.2, "CTC": 19.6, "CTA":  7.2, "CTG": 39.6},
+    "K": {"AAA": 24.4, "AAG": 31.9},
+    "M": {"ATG": 22.0},
+    "F": {"TTT": 17.6, "TTC": 20.3},
+    "P": {"CCT": 17.5, "CCC": 19.8, "CCA": 16.9, "CCG":  6.9},
+    "S": {"TCT": 15.2, "TCC": 17.7, "TCA": 12.2, "TCG":  4.4, "AGT": 12.1, "AGC": 19.5},
+    "T": {"ACT": 13.1, "ACC": 18.9, "ACA": 15.1, "ACG":  6.1},
+    "W": {"TGG": 13.2},
+    "Y": {"TAT": 12.2, "TAC": 15.3},
+    "V": {"GTT": 11.0, "GTC": 14.5, "GTA":  7.1, "GTG": 28.1},
 }
 
 # mRNA structural elements.
@@ -91,22 +109,12 @@ def _load_jmx_index(path: Path = _JMX_INDEX_PATH) -> set[str]:
     return _jmx_cache
 
 
-def score_jmx_proxy(
-    peptide: str,
-    gold_standard: list[dict[str, Any]] | None = None,
-) -> float:
+def score_jmx_proxy(peptide: str) -> float:
     """Score a peptide's self-similarity to the human proteome.
 
     Generates all 9-mer windows from the peptide and checks how many
     appear in the human reviewed proteome.  Higher fraction = more
     self-like = more likely to engage natural Tregs.
-
-    Gold-standard peptides whose sequences don't resolve against the
-    current UniProt reference (due to numbering offsets or isoform
-    differences in the source paper) receive literature-based scores:
-    tolerogenic-validated peptides get 0.85, other immunodominant
-    peptides get 0.70.  These are known human self-peptides by
-    definition — they were isolated from human platelet glycoproteins.
 
     Returns a score in [0, 1].  Returns 0.5 (neutral) if the JMX
     index has not been built.
@@ -124,24 +132,7 @@ def score_jmx_proxy(
 
     ninemers = [pep[i : i + 9] for i in range(len(pep) - 8)]
     hits = sum(1 for nm in ninemers if nm in index)
-    score = hits / len(ninemers)
-
-    # Gold-standard bridge: if a known immunodominant peptide scores
-    # zero due to sequence-reference mismatch, assign a literature-based
-    # floor.  These peptides are proven human self-sequences — they
-    # were experimentally isolated from patient platelets.
-    if score == 0.0 and gold_standard is not None:
-        is_tolerogenic = any(
-            pep == gs["sequence"].upper() and gs.get("tolerogenic_validated", False)
-            for gs in gold_standard
-        )
-        is_gold = any(pep == gs["sequence"].upper() for gs in gold_standard)
-        if is_tolerogenic:
-            return 0.85
-        if is_gold:
-            return 0.70
-
-    return score
+    return hits / len(ninemers)
 
 
 # ---------------------------------------------------------------------------
@@ -310,13 +301,66 @@ def score_full_construct(
 # Codon Optimization & mRNA Generation
 # ---------------------------------------------------------------------------
 
-def optimize_codons(aa_sequence: str) -> str:
-    """Convert an amino-acid sequence to a codon-optimized DNA string.
+def optimize_codons(
+    aa_sequence: str,
+    seed: int = 42,
+    gc_max_window: float = 0.62,
+    window_size: int = 18,
+) -> str:
+    """Convert an amino-acid sequence to a GC-balanced codon-optimized DNA string.
 
-    Uses the most frequent human codon for each amino acid.
-    Unknown amino acids are skipped.
+    Samples codons proportionally to their human usage frequency (Kazusa
+    database) with a sliding-window GC constraint.  After selecting each
+    codon, checks the last *window_size* codons; if GC content exceeds
+    *gc_max_window*, the next codon is forced to the lowest-GC synonym.
+
+    Deterministic for a given *seed*.  Targets overall GC of 50-60%.
+
+    Parameters
+    ----------
+    aa_sequence : str
+        Amino acid string.
+    seed : int
+        Random seed for reproducibility (default 42).
+    gc_max_window : float
+        Maximum GC fraction in the sliding window before forcing low-GC
+        codons (default 0.62).
+    window_size : int
+        Number of codons in the sliding GC window (default 18, = 54 nt).
     """
-    return "".join(HUMAN_CODONS.get(aa, "") for aa in aa_sequence.upper())
+    import random
+    rng = random.Random(seed)
+
+    dna: list[str] = []
+
+    for aa in aa_sequence.upper():
+        if aa not in HUMAN_CODON_TABLE:
+            continue
+
+        codons_freqs = HUMAN_CODON_TABLE[aa]
+        codons = list(codons_freqs.keys())
+        weights = list(codons_freqs.values())
+
+        # Check sliding window GC — if too high, prefer low-GC codons
+        if len(dna) >= window_size:
+            recent = "".join(dna[-window_size:])
+            gc_frac = sum(1 for nt in recent if nt in "GC") / len(recent)
+            if gc_frac > gc_max_window:
+                # Sort codons by GC count (ascending) and pick the lowest
+                gc_counts = [sum(1 for nt in c if nt in "GC") for c in codons]
+                min_gc = min(gc_counts)
+                low_gc = [c for c, g in zip(codons, gc_counts) if g == min_gc]
+                # Among lowest-GC codons, pick by frequency weight
+                low_weights = [codons_freqs[c] for c in low_gc]
+                chosen = rng.choices(low_gc, weights=low_weights, k=1)[0]
+                dna.append(chosen)
+                continue
+
+        # Normal weighted sampling
+        chosen = rng.choices(codons, weights=weights, k=1)[0]
+        dna.append(chosen)
+
+    return "".join(dna)
 
 
 def build_mrna(aa_sequence: str) -> dict[str, Any]:
@@ -390,6 +434,49 @@ def assign_experimental_tier(
     return 3
 
 
+def select_diverse_peptides(
+    scores_df: pd.DataFrame,
+    antigen_sequence: str,
+    top_n: int = 10,
+    min_distance: int = 10,
+) -> list[str]:
+    """Select top peptides with positional diversity.
+
+    Iterates through peptides ranked by composite_score.  After selecting
+    each peptide, excludes all remaining candidates whose start position
+    in *antigen_sequence* is within *min_distance* residues.  This
+    prevents overlapping 15-mers from the same region from dominating
+    the construct.
+
+    Peptides not found in the antigen sequence (e.g. gold-standard
+    peptides from a different numbering) are always included — they
+    can't overlap anything.
+    """
+    selected: list[str] = []
+    used_positions: list[int] = []
+
+    for _, row in scores_df.iterrows():
+        if len(selected) >= top_n:
+            break
+
+        pep = row["peptide"]
+        pos = antigen_sequence.find(pep)
+
+        # If peptide not found in antigen, always include it
+        if pos == -1:
+            selected.append(pep)
+            continue
+
+        # Check distance from all already-selected positions
+        if any(abs(pos - used) < min_distance for used in used_positions):
+            continue
+
+        selected.append(pep)
+        used_positions.append(pos)
+
+    return selected
+
+
 # ---------------------------------------------------------------------------
 # Main Pipeline — Generate mRNA Constructs
 # ---------------------------------------------------------------------------
@@ -401,13 +488,14 @@ def generate_mrna_constructs(
     gold_standard_path: str | os.PathLike[str] = "data/processed/itp_gold_standard.json",
     output_path: str | os.PathLike[str] = "data/processed/itgb3_tolerogenic_mrna_constructs.csv",
     linker: str = "GPGPG",
+    antigen_sequence: str | None = None,
 ) -> pd.DataFrame:
     """Generate multi-epitope mRNA vaccine constructs from scored peptides.
 
-    Takes the top *top_n* peptides by composite score, assembles them
-    into a construct with the specified linker, scores the construct,
-    runs B-cell safety filtering and JMX proxy scoring, generates the
-    codon-optimized mRNA sequence, and assigns experimental tiers.
+    Takes the top *top_n* peptides by composite score with positional
+    diversity filtering (overlapping 15-mers from the same region are
+    excluded), assembles them into a construct, and generates the
+    codon-optimized mRNA sequence.
 
     Returns a DataFrame and saves to *output_path*.
     """
@@ -423,8 +511,14 @@ def generate_mrna_constructs(
         predictions_df[predictions_df["percentile_rank"] < 2.0]["peptide"].unique()
     )
 
-    # Take top N peptides
-    top_peptides = scores_df.head(top_n)["peptide"].tolist()
+    # Select top N peptides with positional diversity
+    if antigen_sequence is not None:
+        top_peptides = select_diverse_peptides(
+            scores_df, antigen_sequence, top_n=top_n, min_distance=10,
+        )
+    else:
+        # Fallback: no diversity filter
+        top_peptides = scores_df.head(top_n)["peptide"].tolist()
 
     # Build a single construct from all top_n peptides
     construct_seq = assemble_construct(top_peptides, linker=linker)
@@ -442,7 +536,7 @@ def generate_mrna_constructs(
         composite = row.iloc[0]["composite_score"] if not row.empty else 0.0
         itp_prox = row.iloc[0]["itp_proximity"] if not row.empty else 0.0
 
-        jmx = score_jmx_proxy(pep, gold_standard=gold_standard)
+        jmx = score_jmx_proxy(pep)
         bcell_risk, bcell_penalty = score_bcell_risk(pep)
         tier = assign_experimental_tier(pep, composite, itp_prox, gold_standard)
         final_adj = composite + bcell_penalty
@@ -540,7 +634,13 @@ if __name__ == "__main__":
     print("Phase 4 — Multi-Epitope mRNA Construct Assembly")
     print("=" * 55)
 
-    construct_df, peptide_df = generate_mrna_constructs(top_n=5)
+    # Load antigen sequence for positional diversity filtering
+    from src.data.uniprot import fetch_sequence
+    itgb3_seq = fetch_sequence("P05106")["sequence"]
+
+    construct_df, peptide_df = generate_mrna_constructs(
+        top_n=5, antigen_sequence=itgb3_seq,
+    )
 
     print("\n--- Construct Summary ---\n")
     for _, row in construct_df.iterrows():
