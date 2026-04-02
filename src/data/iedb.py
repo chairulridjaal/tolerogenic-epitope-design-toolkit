@@ -183,17 +183,22 @@ def fetch_bcell_epitopes(
     return _apply_disease_filter(records, disease_filter)
 
 
-def fetch_all_itp_epitopes(
+def fetch_all_disease_epitopes(
+    antigen_ids: list[str],
     cache_dir: str | os.PathLike[str] = "data/raw",
     disease_filter: str | None = None,
 ) -> list[dict[str, str | None]]:
-    """Fetch T-cell and B-cell epitopes for every antigen in ``ITP_ANTIGENS``.
+    """Fetch T-cell and B-cell epitopes for a list of antigen UniProt IDs.
+
+    Disease-agnostic version of the old ``fetch_all_itp_epitopes``.
 
     Parameters
     ----------
-    cache_dir:
+    antigen_ids :
+        List of UniProt accession strings.
+    cache_dir :
         Directory for cached JSON responses.
-    disease_filter:
+    disease_filter :
         Passed through to the individual fetch functions.
 
     Returns
@@ -204,7 +209,7 @@ def fetch_all_itp_epitopes(
     """
     combined: list[dict[str, str | None]] = []
 
-    for accession in ITP_ANTIGENS:
+    for accession in antigen_ids:
         for fetch_fn, etype in [
             (fetch_tcell_epitopes, "T-cell"),
             (fetch_bcell_epitopes, "B-cell"),
@@ -214,6 +219,23 @@ def fetch_all_itp_epitopes(
                 rec["epitope_type"] = etype
                 rec["uniprot_id"] = accession
             combined.extend(records)
+
+    return combined
+
+
+def fetch_all_itp_epitopes(
+    cache_dir: str | os.PathLike[str] = "data/raw",
+    disease_filter: str | None = None,
+) -> list[dict[str, str | None]]:
+    """Fetch epitopes for all ITP antigens.
+
+    .. deprecated::
+        Use :func:`fetch_all_disease_epitopes` with a list of antigen IDs
+        from a disease profile instead.
+    """
+    return fetch_all_disease_epitopes(
+        list(ITP_ANTIGENS.keys()), cache_dir=cache_dir, disease_filter=disease_filter,
+    )
 
     return combined
 

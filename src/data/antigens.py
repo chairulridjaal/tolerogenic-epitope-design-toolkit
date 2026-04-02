@@ -1,14 +1,17 @@
 """
-ITP target antigen definitions.
+Antigen definitions for the tolerogenic epitope pipeline.
 
-Maps UniProt accession numbers to metadata for the six platelet surface
-glycoproteins targeted by autoantibodies in Immune Thrombocytopenic
-Purpura (ITP).  Two protein complexes are represented:
-
-  GPIIb/IIIa  — integrin αIIbβ3, the primary autoantibody target
-  GPIb-IX-V   — the von Willebrand factor receptor complex
+``ITP_ANTIGENS`` is the original hardcoded dict for backward compatibility.
+New code should use ``load_antigens_from_profile()`` with a disease profile
+from ``src.data.disease_profile``.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
+# Legacy ITP antigen dict — kept for backward compatibility with existing
+# notebooks and imports.  Do not delete.
 ITP_ANTIGENS: dict[str, dict[str, str]] = {
     "P08514": {
         "gene": "ITGA2B",
@@ -41,3 +44,13 @@ ITP_ANTIGENS: dict[str, dict[str, str]] = {
         "complex": "GPIb-IX-V",
     },
 }
+
+
+def load_antigens_from_profile(profile: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Build an antigen dict from a disease profile.
+
+    Returns a dict matching the ``ITP_ANTIGENS`` format:
+    ``{uniprot_id: {"gene": ..., "name": ..., ...}}``.
+    """
+    from src.data.disease_profile import get_antigen_dict
+    return get_antigen_dict(profile)

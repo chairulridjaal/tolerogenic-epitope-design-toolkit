@@ -1,0 +1,49 @@
+{
+  "disease_id": "ms",
+  "disease_name": "Multiple Sclerosis",
+  "iedb_disease_filter": "multiple sclerosis",
+  "primary_antigen": "P02686",
+  "antigens": [
+    {
+      "uniprot_id": "P02686",
+      "gene": "MBP",
+      "name": "Myelin basic protein",
+      "complex": "Myelin",
+      "signal_peptide_length": 0
+    },
+    {
+      "uniprot_id": "P60201",
+      "gene": "PLP1",
+      "name": "Myelin proteolipid protein",
+      "complex": "Myelin",
+      "signal_peptide_length": 0
+    },
+    {
+      "uniprot_id": "Q16653",
+      "gene": "MOG",
+      "name": "Myelin oligodendrocyte glycoprotein",
+      "complex": "Myelin",
+      "signal_peptide_length": 29
+    }
+  ],
+  "gold_standard_path": "data/processed/ms_gold_standard.json",
+  "calibration": {
+    "peptides": {
+      "MBP83-99": {
+        "check": "criteria",
+        "criteria": {"itp_proximity": 0.40, "jmx": 0.50},
+        "note": "17-mer — not in 15-mer scan. Calibration checks proximity scores of overlapping 15-mers. Genuine HLA-DR15 binder (Kappos 2000, Streeter 2015)."
+      },
+      "MBP30-44": {
+        "check": "criteria",
+        "criteria": {"itp_proximity": 0.40, "jmx": 0.50},
+        "note": "ATX-MS-1467 component (Streeter 2015). MHC binding affinity not well characterised — proximity check used."
+      }
+    }
+  },
+  "references": [
+    "Kappos L et al. (2000). Nature Medicine 6:1176-1182.",
+    "Streeter HB et al. (2015). Journal of Autoimmunity 65:104-111.",
+    "Larche M, Wraith DC. (2005). Nature Medicine 11:S69-76."
+  ]
+}

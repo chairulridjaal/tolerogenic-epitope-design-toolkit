@@ -483,12 +483,13 @@ def select_diverse_peptides(
 
 def generate_mrna_constructs(
     top_n: int = 5,
-    scores_path: str | os.PathLike[str] = "data/processed/itgb3_tolerogenic_scores.csv",
+    scores_path: str | os.PathLike[str] = "data/processed/itp_tolerogenic_scores.csv",
     predictions_path: str | os.PathLike[str] = "data/processed/itgb3_top_binders.csv",
     gold_standard_path: str | os.PathLike[str] = "data/processed/itp_gold_standard.json",
-    output_path: str | os.PathLike[str] = "data/processed/itgb3_tolerogenic_mrna_constructs.csv",
+    output_path: str | os.PathLike[str] = "data/processed/itp_mrna_constructs.csv",
     linker: str = "GPGPG",
     antigen_sequence: str | None = None,
+    disease_id: str = "itp",
 ) -> pd.DataFrame:
     """Generate multi-epitope mRNA vaccine constructs from scored peptides.
 
@@ -568,7 +569,7 @@ def generate_mrna_constructs(
     # Create construct-level output row
     construct_rows = []
     construct_rows.append({
-        "construct_id": f"ITP-ITGB3-{linker}-{top_n}ep",
+        "construct_id": f"{disease_id.upper()}-{linker}-{top_n}ep",
         "peptide_list": " | ".join(top_peptides),
         "n_epitopes": len(top_peptides),
         "linker": linker,
@@ -592,7 +593,7 @@ def generate_mrna_constructs(
         )
         alt_mrna = build_mrna(alt_construct_seq)
         construct_rows.append({
-            "construct_id": f"ITP-ITGB3-AAY-{top_n}ep",
+            "construct_id": f"{disease_id.upper()}-AAY-{top_n}ep",
             "peptide_list": " | ".join(top_peptides),
             "n_epitopes": len(top_peptides),
             "linker": "AAY",
@@ -629,17 +630,35 @@ def generate_mrna_constructs(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import argparse
+
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+
+    parser = argparse.ArgumentParser(description="mRNA construct assembly")
+    parser.add_argument("--disease", default="itp", help="Disease profile ID (default: itp)")
+    cli_args = parser.parse_args()
 
     print("Phase 4 — Multi-Epitope mRNA Construct Assembly")
     print("=" * 55)
 
-    # Load antigen sequence for positional diversity filtering
+    from src.data.disease_profile import (
+        load_disease_profile, get_primary_antigen, get_gold_standard_path,
+    )
     from src.data.uniprot import fetch_sequence
-    itgb3_seq = fetch_sequence("P05106")["sequence"]
+
+    profile = load_disease_profile(cli_args.disease)
+    disease_id = profile["disease_id"]
+    primary = get_primary_antigen(profile)
+    antigen_seq = fetch_sequence(primary)["sequence"]
 
     construct_df, peptide_df = generate_mrna_constructs(
-        top_n=5, antigen_sequence=itgb3_seq,
+        top_n=5,
+        scores_path=f"data/processed/{disease_id}_tolerogenic_scores.csv",
+        predictions_path=f"data/processed/{disease_id}_top_binders.csv",
+        gold_standard_path=get_gold_standard_path(profile),
+        output_path=f"data/processed/{disease_id}_mrna_constructs.csv",
+        antigen_sequence=antigen_seq,
+        disease_id=disease_id,
     )
 
     print("\n--- Construct Summary ---\n")

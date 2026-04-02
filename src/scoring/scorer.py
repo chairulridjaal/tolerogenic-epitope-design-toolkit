@@ -213,6 +213,10 @@ def score_itp_proximity(
     return best
 
 
+# Disease-agnostic alias.  score_itp_proximity is kept for backward compat.
+score_disease_proximity = score_itp_proximity
+
+
 # ---------------------------------------------------------------------------
 # Criterion 6 — Solubility (GRAVY Score)
 # ---------------------------------------------------------------------------
@@ -624,27 +628,55 @@ def score_all_peptides(
 def run_calibration_check(
     scores_df: pd.DataFrame,
     gold_standard: list[dict[str, Any]],
+    calibration_spec: dict[str, Any] | None = None,
 ) -> bool:
-    """Calibration against Hall et al. 2019 validated tolerogenic peptides.
+    """Calibration against validated tolerogenic peptides.
 
-    Peptide_2 (TTRGVSSCQQCLAVS): low MHC affinity by design (Sukati 2007
-    Table 6 — no predicted high-affinity HLA-DR binding). Calibration
-    checks ITP proximity and JMX scores, not composite rank. Low MHC
-    binding is the expected biology for tolerance-escape autoepitopes.
+    If *calibration_spec* is provided (from a disease profile), it
+    defines per-peptide pass criteria.  Otherwise falls back to the
+    legacy ITP-specific checks for Peptide_2 and Peptide_82.
 
-    Peptide_82 (ALLIWKLLITIHDRK): genuine HLA-DR binder (Sukati 2007
-    Table 6 — binds DR01, DR08, DR11, DR13, DR15). Calibration checks
-    composite rank (top 20%) AND mhc_zone > 0.5.
+    Calibration spec format (from disease profile JSON)::
+
+        {
+            "peptides": {
+                "Peptide_2": {
+                    "check": "criteria",
+                    "criteria": {"itp_proximity": 0.99, "jmx": 0.99},
+                    "note": "..."
+                },
+                "Peptide_82": {
+                    "check": "rank_and_mhc",
+                    "max_rank_percentile": 0.20,
+                    "min_mhc_zone": 0.5,
+                    "note": "..."
+                }
+            }
+        }
     """
     n = len(scores_df)
     threshold_rank = max(1, int(n * 0.20))
 
-    # Find the two validated peptides
-    validated = {
-        p["id"]: p["sequence"]
-        for p in gold_standard
-        if p.get("tolerogenic_validated")
-    }
+    # Build calibration targets: either from spec or from gold standard
+    if calibration_spec and "peptides" in calibration_spec:
+        # Profile-driven: look up sequences from gold standard by ID
+        gs_by_id = {p["id"]: p for p in gold_standard}
+        targets: dict[str, dict[str, Any]] = {}
+        for pid, spec in calibration_spec["peptides"].items():
+            if pid in gs_by_id:
+                targets[pid] = {
+                    "sequence": gs_by_id[pid]["sequence"],
+                    "spec": spec,
+                }
+    else:
+        # Legacy fallback: all tolerogenic-validated peptides
+        targets = {}
+        for p in gold_standard:
+            if p.get("tolerogenic_validated"):
+                targets[p["id"]] = {
+                    "sequence": p["sequence"],
+                    "spec": {"check": "rank", "max_rank_percentile": 0.20},
+                }
 
     print(f"\n{'='*60}")
     print("CALIBRATION CHECK")
@@ -656,7 +688,10 @@ def run_calibration_check(
     results: dict[str, bool] = {}
     scored_peptides = scores_df["peptide"].tolist()
 
-    for pid, seq in validated.items():
+    for pid, target in targets.items():
+        seq = target["sequence"]
+        spec = target["spec"]
+
         if seq not in scored_peptides:
             print(f"  {pid} ({seq})")
             print(f"    NOT FOUND in scored peptides — FAIL")
@@ -673,28 +708,41 @@ def run_calibration_check(
               f"itp={row['itp_proximity']:.2f}  jmx={row['jmx']:.2f}  "
               f"composite={row['composite_score']:.4f}")
 
-        if pid == "Peptide_2":
-            # Low MHC binding expected (Sukati 2007). Check ITP proximity
-            # and JMX only — composite rank is not meaningful for this peptide.
-            p2_pass = row["itp_proximity"] >= 0.99 and row["jmx"] >= 0.99
-            status = "PASS" if p2_pass else "FAIL"
-            print(f"    Criterion: itp_proximity>=1.0 AND jmx>=1.0 — {status}")
-            print(f"    (Low MHC binding expected — Sukati 2007 Table 6)")
-            results[pid] = p2_pass
+        check_type = spec.get("check", "rank")
 
-        elif pid == "Peptide_82":
-            # Genuine HLA-DR binder. Check composite rank AND MHC zone.
-            p82_pass = rank <= threshold_rank and row["mhc_zone"] > 0.5
-            status = "PASS" if p82_pass else "FAIL"
-            print(f"    Criterion: rank<={threshold_rank} AND mhc_zone>0.5 — {status}")
-            results[pid] = p82_pass
+        if check_type == "criteria":
+            # Check specific score thresholds
+            criteria = spec.get("criteria", {})
+            passed = all(
+                row.get(col, 0) >= threshold
+                for col, threshold in criteria.items()
+            )
+            status = "PASS" if passed else "FAIL"
+            criteria_str = " AND ".join(f"{k}>={v}" for k, v in criteria.items())
+            print(f"    Criterion: {criteria_str} — {status}")
+            if spec.get("note"):
+                print(f"    ({spec['note']})")
+            results[pid] = passed
+
+        elif check_type == "rank_and_mhc":
+            max_pct = spec.get("max_rank_percentile", 0.20)
+            min_mhc = spec.get("min_mhc_zone", 0.5)
+            rank_limit = max(1, int(n * max_pct))
+            passed = rank <= rank_limit and row["mhc_zone"] > min_mhc
+            status = "PASS" if passed else "FAIL"
+            print(f"    Criterion: rank<={rank_limit} AND mhc_zone>{min_mhc} — {status}")
+            if spec.get("note"):
+                print(f"    ({spec['note']})")
+            results[pid] = passed
 
         else:
-            # Unknown validated peptide — fall back to rank check
-            fallback_pass = rank <= threshold_rank
-            status = "PASS" if fallback_pass else "FAIL"
-            print(f"    Criterion: rank<={threshold_rank} — {status}")
-            results[pid] = fallback_pass
+            # Default: rank check
+            max_pct = spec.get("max_rank_percentile", 0.20)
+            rank_limit = max(1, int(n * max_pct))
+            passed = rank <= rank_limit
+            status = "PASS" if passed else "FAIL"
+            print(f"    Criterion: rank<={rank_limit} — {status}")
+            results[pid] = passed
 
     overall = all(results.values())
     print(f"\nOverall: {'PASS' if overall else 'FAIL'}")
@@ -708,29 +756,51 @@ def run_calibration_check(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    import argparse
+
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
+    parser = argparse.ArgumentParser(description="Tolerogenic peptide scorer")
+    parser.add_argument(
+        "--disease", default="itp",
+        help="Disease profile ID (default: itp). Looks for data/diseases/{id}.json",
+    )
+    args = parser.parse_args()
+
+    from src.data.disease_profile import (
+        load_disease_profile, get_primary_antigen, get_gold_standard_path,
+        get_calibration_spec,
+    )
     from src.data.uniprot import fetch_sequence
 
-    print("Tolerogenic Scoring — ITGB3 (P05106)\n")
+    # 0. Load disease profile
+    profile = load_disease_profile(args.disease)
+    disease_id = profile["disease_id"]
+    primary_antigen = get_primary_antigen(profile)
 
-    # 1. Load ITGB3 sequence
-    entry = fetch_sequence("P05106")
-    print(f"Antigen: {entry['name']} ({len(entry['sequence'])} aa)")
+    print(f"Tolerogenic Scoring — {profile['disease_name']} ({disease_id})\n")
+
+    # 1. Load primary antigen sequence
+    entry = fetch_sequence(primary_antigen)
+    antigen_gene = entry.get("name", primary_antigen)
+    print(f"Primary antigen: {antigen_gene} ({primary_antigen}, {len(entry['sequence'])} aa)")
 
     # 2. Load Phase 2 predictions
-    pred_path = Path("data/processed/itgb3_top_binders.csv")
+    pred_path = Path(f"data/processed/{disease_id}_top_binders.csv")
+    if not pred_path.exists():
+        # Fallback for legacy ITP naming
+        legacy = Path("data/processed/itgb3_top_binders.csv")
+        if legacy.exists() and disease_id == "itp":
+            pred_path = legacy
     predictions_df = pd.read_csv(pred_path)
     print(f"Predictions: {len(predictions_df)} rows from {pred_path.name}")
 
-    # 3. Load gold standard (with position verification against ITGB3)
-    gs_path = Path("data/processed/itp_gold_standard.json")
+    # 3. Load gold standard (with position verification)
+    gs_path = Path(get_gold_standard_path(profile))
     gold_standard = load_gold_standard(gs_path, antigen_sequence=entry["sequence"])
     print(f"Gold standard: {len(gold_standard)} peptides from {gs_path.name} (position-verified)")
 
-    # 3b. Get real MHC predictions for gold standard peptides and merge
-    #     into predictions_df. This replaces the old bridge scores with
-    #     actual NetMHCIIpan data. Results are cached after first run.
+    # 3b. Get real MHC predictions for gold standard peptides
     gold_seqs = [p["sequence"] for p in gold_standard]
     missing_gs = [s for s in gold_seqs if s not in predictions_df["peptide"].values]
     if missing_gs:
@@ -743,12 +813,9 @@ if __name__ == "__main__":
         except Exception as exc:
             print(f"  Warning: could not fetch gold-standard predictions: {exc}")
 
-    # 4. Extract unique peptides + force-include gold standard sequences
-    #    so calibration peptides are always scored even if they aren't
-    #    among the MHC-II top binders.
+    # 4. Extract unique peptides + force-include gold standard
     peptides = predictions_df["peptide"].unique().tolist()
-    gold_seqs = [p["sequence"] for p in gold_standard]
-    peptides = list(set(peptides + gold_seqs))  # deduplicate
+    peptides = list(set(peptides + gold_seqs))
     print(f"Unique binder peptides: {predictions_df['peptide'].nunique()}")
     print(f"Added {len(gold_seqs)} gold-standard peptides for validation "
           f"(now scoring {len(peptides)} total)")
@@ -761,8 +828,9 @@ if __name__ == "__main__":
     )
     print(f"Done. {len(scores_df)} peptides scored.\n")
 
-    # 6. Calibration
-    cal_pass = run_calibration_check(scores_df, gold_standard)
+    # 6. Calibration (uses disease-specific spec)
+    cal_spec = get_calibration_spec(profile)
+    cal_pass = run_calibration_check(scores_df, gold_standard, calibration_spec=cal_spec)
 
     # 7. Top 20
     print("Top 20 peptides by composite score:\n")
@@ -772,7 +840,6 @@ if __name__ == "__main__":
     ]
     top20 = scores_df.head(20)[display_cols]
 
-    # Pretty-print
     header = (
         f"{'#':<4} {'Peptide':<18} {'MHC':>5} {'HLA':>5} {'ITP':>5} "
         f"{'IL10':>5} {'IFNg':>5} {'Sol':>5} {'JMX':>5} {'Score':>6}"
@@ -788,12 +855,12 @@ if __name__ == "__main__":
             f"{row['jmx']:>5.2f} {row['composite_score']:>6.3f}"
         )
 
-    # 8. Save
-    out_path = Path("data/processed/itgb3_tolerogenic_scores.csv")
+    # 8. Save (disease-prefixed output path)
+    out_path = Path(f"data/processed/{disease_id}_tolerogenic_scores.csv")
     scores_df.to_csv(out_path, index=False)
     print(f"\nFull results saved to {out_path}")
 
-    # 9. Generate mRNA constructs (Phase 4)
+    # 9. Generate mRNA constructs
     print("\n" + "=" * 60)
     print("PHASE 4 — mRNA CONSTRUCT ASSEMBLY")
     print("=" * 60)
@@ -805,7 +872,9 @@ if __name__ == "__main__":
             scores_path=out_path,
             predictions_path=pred_path,
             gold_standard_path=gs_path,
+            output_path=Path(f"data/processed/{disease_id}_mrna_constructs.csv"),
             antigen_sequence=entry["sequence"],
+            disease_id=disease_id,
         )
 
         print("\nTop constructs:\n")

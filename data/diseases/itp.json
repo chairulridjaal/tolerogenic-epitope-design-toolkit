@@ -1,0 +1,65 @@
+{
+    "disease_id": "itp",
+    "disease_name": "Immune Thrombocytopenic Purpura",
+    "iedb_disease_filter": "thrombocytopenic purpura",
+    "primary_antigen": "P05106",
+    "signal_peptide_length": 26,
+    "antigens": [
+        {
+            "uniprot_id": "P08514",
+            "gene": "ITGA2B",
+            "name": "Integrin subunit alpha-IIb",
+            "complex": "GPIIb/IIIa"
+        },
+        {
+            "uniprot_id": "P05106",
+            "gene": "ITGB3",
+            "name": "Integrin subunit beta-3",
+            "complex": "GPIIb/IIIa"
+        },
+        {
+            "uniprot_id": "P07359",
+            "gene": "GP1BA",
+            "name": "Platelet glycoprotein Ib alpha chain",
+            "complex": "GPIb-IX-V"
+        },
+        {
+            "uniprot_id": "P13224",
+            "gene": "GP1BB",
+            "name": "Platelet glycoprotein Ib beta chain",
+            "complex": "GPIb-IX-V"
+        },
+        {
+            "uniprot_id": "P14770",
+            "gene": "GP9",
+            "name": "Platelet glycoprotein IX",
+            "complex": "GPIb-IX-V"
+        },
+        {
+            "uniprot_id": "P40197",
+            "gene": "GP5",
+            "name": "Platelet glycoprotein V",
+            "complex": "GPIb-IX-V"
+        }
+    ],
+    "gold_standard_path": "data/processed/itp_gold_standard.json",
+    "calibration": {
+        "peptides": {
+            "Peptide_2": {
+                "check": "criteria",
+                "criteria": {"itp_proximity": 0.99, "jmx": 0.99},
+                "note": "Low MHC binding expected — Sukati 2007 Table 6"
+            },
+            "Peptide_82": {
+                "check": "rank_and_mhc",
+                "max_rank_percentile": 0.20,
+                "min_mhc_zone": 0.5,
+                "note": "Genuine HLA-DR binder — Sukati 2007 Table 6"
+            }
+        }
+    },
+    "references": [
+        "Sukati H et al. (2007). Blood 109(10):4528-4538.",
+        "Hall LS et al. (2019). Haematologica 104(5):1079-1087."
+    ]
+}
