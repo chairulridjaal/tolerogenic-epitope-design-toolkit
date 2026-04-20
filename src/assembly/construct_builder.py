@@ -139,31 +139,69 @@ def score_jmx_proxy(peptide: str) -> float:
 # B-Cell Epitope Safety Filter
 # ---------------------------------------------------------------------------
 
-def score_bcell_risk(peptide: str, window: int = 7, threshold: float = 4.0) -> tuple[bool, float]:
+def score_bcell_risk(
+    peptide: str,
+    window: int = 7,
+    threshold: float = 4.0,
+    antigen_sequence: str | None = None,
+    percentile_cutoff: float = 0.80,
+) -> tuple[bool, float]:
     """Check if a peptide contains a likely linear B-cell epitope.
 
     Uses the Parker hydrophilicity scale (Parker et al., 1986) with a
-    sliding window.  If any window's average hydrophilicity exceeds
-    *threshold*, the peptide is flagged as a B-cell risk.
+    sliding window.
 
-    A peptide that triggers antibody production against itself would
-    undermine the tolerogenic goal.
+    If *antigen_sequence* is provided, uses protein-relative thresholding:
+    the peptide is flagged only if its max hydrophilicity window is in
+    the top ``1 - percentile_cutoff`` fraction for the source protein.
+    This avoids false positives for intrinsically disordered proteins
+    like MBP where baseline hydrophilicity is uniformly high.
+
+    If *antigen_sequence* is not provided, falls back to the absolute
+    threshold (4.0).
 
     Returns
     -------
     (is_risky, penalty)
-        ``is_risky`` is True if any window exceeds the threshold.
+        ``is_risky`` is True if the peptide exceeds the threshold.
         ``penalty`` is -0.15 if risky, 0.0 otherwise.
     """
     pep = peptide.upper()
     if len(pep) < window:
         return False, 0.0
 
-    for i in range(len(pep) - window + 1):
-        win = pep[i : i + window]
-        values = [PARKER_HYDROPHILICITY.get(aa, 0.0) for aa in win]
-        if sum(values) / len(values) > threshold:
-            return True, -0.15
+    def _max_window_score(seq: str) -> float:
+        best = -999.0
+        for i in range(len(seq) - window + 1):
+            win = seq[i : i + window]
+            values = [PARKER_HYDROPHILICITY.get(aa, 0.0) for aa in win]
+            score = sum(values) / len(values)
+            if score > best:
+                best = score
+        return best
+
+    pep_score = _max_window_score(pep)
+
+    if antigen_sequence is not None:
+        # Protein-relative: compute hydrophilicity for all 15-mers
+        ag = antigen_sequence.upper()
+        all_scores: list[float] = []
+        for i in range(len(ag) - 14):
+            kmer = ag[i : i + 15]
+            all_scores.append(_max_window_score(kmer))
+
+        if all_scores:
+            all_scores.sort()
+            cutoff_idx = int(len(all_scores) * percentile_cutoff)
+            protein_threshold = all_scores[min(cutoff_idx, len(all_scores) - 1)]
+
+            if pep_score > protein_threshold:
+                return True, -0.15
+            return False, 0.0
+
+    # Fallback: absolute threshold
+    if pep_score > threshold:
+        return True, -0.15
 
     return False, 0.0
 
@@ -566,6 +604,18 @@ def generate_mrna_constructs(
     # Build the mRNA
     mrna = build_mrna(construct_seq)
 
+    # Population coverage
+    try:
+        from src.assembly.population_coverage import (
+            get_epitope_alleles, compute_coverage_table, format_coverage_report,
+        )
+        epitope_alleles = get_epitope_alleles(top_peptides, predictions_df)
+        coverage = compute_coverage_table(epitope_alleles)
+        coverage_str = "; ".join(f"{pop}={cov:.0%}" for pop, cov in coverage.items())
+    except Exception:
+        coverage_str = "not computed"
+        coverage = {}
+
     # Create construct-level output row
     construct_rows = []
     construct_rows.append({
@@ -579,6 +629,7 @@ def generate_mrna_constructs(
         "gc_content": mrna["gc_content"],
         "construct_score": round(construct_result["construct_score"], 4),
         "junction_flags": len(construct_result["junction_flags"]),
+        "population_coverage": coverage_str,
         "bonuses": "; ".join(construct_result["bonuses_applied"]),
         "mrna_sequence": mrna["mrna_sequence"],
         "manufacturing_notes": mrna["notes"],

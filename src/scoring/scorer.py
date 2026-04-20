@@ -1,5 +1,5 @@
 """
-Tolerogenic scoring module for the ITP epitope pipeline.
+Tolerogenic scoring module for the epitope design pipeline.
 
 Implements seven scoring criteria for ranking candidate peptides by their
 likelihood of inducing immune tolerance rather than effector activation.
@@ -7,26 +7,12 @@ Each criterion is normalized to [0, 1] and combined into a weighted
 composite score.  Criteria, weights, and their literature sources are
 documented in ``docs/tolerogenic_criteria.md``.
 
-IMPORTANT — third-party service dependencies:
+Criterion 4 (Treg TCR-contact self-similarity) uses the frequency of
+TCR-facing residues from the MHC-II binding core in the human proteome.
+No external ML model — computed from the existing JMX 9-mer index and
+cached NetMHCIIpan core predictions.
 
-    * **IL-10pred** (Criterion 4) runs **locally** using a Random Forest
-      model trained on Nagpal et al. (2017) data with the exact 73
-      features from Table S1.  Train once with
-      ``python -m src.scoring.train_il10_model``.  If the model file is
-      missing, the score falls back to **0.5 (neutral)**.
-
-    * **IFNepitope2** (Criterion 5) runs **locally** using the
-      ``ifnepitope2`` package (Dhall et al., 2024, *Scientific Reports*).
-      Install with ``pip install --no-deps ifnepitope2``.  If the package
-      is missing or the model fails to load, the score falls back to
-      **0.5 (neutral)**.
-
-    * **JanusMatrix** (Criterion 7) has **no public API**.  JMX scores are
-      set to **0.5 (neutral)** for all peptides pending manual submission
-      at https://janusmatrix.essentialfacts.com.  Scores can be overridden
-      after manual submission.
-
-Dependencies: ``pandas``, ``scikit-learn``, ``joblib``, standard library only.
+Dependencies: ``pandas``, standard library only.
 """
 
 from __future__ import annotations
@@ -57,21 +43,29 @@ KYTE_DOOLITTLE: dict[str, float] = {
 # Default composite-score weights — sum to 1.0.
 # See docs/tolerogenic_criteria.md for rationale.
 #
-# IL-10 weight reduced (0.15 → 0.08): Hall et al. 2019 found no IL-10
-# elevation in validated ITP tolerogenic model. FoxP3+ Treg mechanism
-# is IL-10 independent in this disease context.
+# Criterion 4: Treg TCR-contact self-similarity (replaced IL-10 which
+# achieves AUC 0.50 on independent data). Weight 0.15 — absorbs the
+# former JMX weight because JMX (Criterion 7) gives zero variance for
+# human self-proteins (100% of 9-mers found, no discrimination).
+# The Treg TCR-contact score IS the effective JMX replacement: it
+# measures the same biological signal (self-mimicry at TCR contacts)
+# using 5-mer motif frequency instead of binary 9-mer presence.
 #
-# ITP proximity increased (0.25 → 0.30): strongest ITP-specific evidence.
-# JMX increased (0.05 → 0.07): self-mimicry is part of the tolerance-
-# escape mechanism (Moise 2013).
+# JMX weight set to 0.00: binary 9-mer proteome lookup gives 1.00 for
+# every peptide from a human self-protein. Protein-count frequency,
+# sequence similarity (≥7/9 identity), and neighbor counting all tested
+# and confirmed to give zero or near-zero variance. The 9-mer space
+# (20^9 = 512B) is too sparse for any metric to discriminate. The 5-mer
+# TCR motif space (20^5 = 3.2M, 73.6% covered) works because it's
+# denser. See docs/esm2_upgrade_log.md for full analysis.
 DEFAULT_WEIGHTS: dict[str, float] = {
     "mhc_zone":         0.20,
     "hla_promiscuity":  0.20,
     "itp_proximity":    0.30,
-    "il10":             0.08,
+    "treg_tcr":         0.15,
     "ifng":             0.07,
     "solubility":       0.08,
-    "jmx":              0.07,
+    "jmx":              0.00,
 }
 
 
@@ -253,10 +247,112 @@ def score_gravy(peptide: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Criterion 4 — IL-10 Induction Potential (local RF model)
-# Local retrained model: RF on 73 features from Nagpal et al. 2017 Table S1.
-# 100% offline after one-time training via train_il10_model.py.
+# Criterion 4 — Treg TCR-Contact Self-Similarity
+# Measures how frequently the TCR-facing residues of a peptide's MHC-II
+# binding core appear in the human proteome. Based on the Tregitope
+# concept (De Groot 2008) and JanusMatrix framework (Moise 2013).
+# No ML model — uses cached NetMHCIIpan core predictions + proteome index.
 # ---------------------------------------------------------------------------
+
+# MHC-II 9-mer core: P1-P9
+# TCR-facing: P2(1), P3(2), P5(4), P7(6), P8(7) — 0-indexed
+_TCR_POSITIONS = [1, 2, 4, 6, 7]
+
+# Module-level cache for the TCR motif frequency index
+_tcr_motif_counts: dict[str, int] | None = None
+_tcr_sorted_counts: list[int] | None = None
+
+
+def _build_tcr_motif_index() -> tuple[dict[str, int], list[int]]:
+    """Build a frequency map of TCR-facing motifs from the human proteome.
+
+    Loads the existing 9-mer index (from build_jmx_index.py), extracts
+    the 5 TCR-contact residues from each 9-mer, and counts how often
+    each motif appears.  Cached in module memory after first call.
+    """
+    global _tcr_motif_counts, _tcr_sorted_counts
+
+    if _tcr_motif_counts is not None:
+        return _tcr_motif_counts, _tcr_sorted_counts
+
+    import gzip
+    import pickle
+    from collections import Counter
+
+    index_path = Path("data/models/human_9mers.pkl.gz")
+    if not index_path.exists():
+        raise FileNotFoundError(
+            f"JMX index not found at {index_path}. "
+            f"Run: python -m src.assembly.build_jmx_index"
+        )
+
+    with gzip.open(index_path, "rb") as f:
+        human_9mers = pickle.load(f)
+
+    counts: Counter[str] = Counter()
+    for ninemer in human_9mers:
+        motif = "".join(ninemer[p] for p in _TCR_POSITIONS)
+        counts[motif] += 1
+
+    _tcr_motif_counts = dict(counts)
+    _tcr_sorted_counts = sorted(counts.values())
+
+    logger.info(
+        "Built TCR motif index: %d unique motifs from %d human 9-mers",
+        len(_tcr_motif_counts), len(human_9mers),
+    )
+    return _tcr_motif_counts, _tcr_sorted_counts
+
+
+def score_treg_tcr_contact(
+    peptide: str,
+    predictions_df: pd.DataFrame,
+) -> float:
+    """Score a peptide's Treg induction potential via TCR-contact self-similarity.
+
+    Extracts the 9-mer MHC-II binding core(s) from the cached NetMHCIIpan
+    predictions, identifies the 5 TCR-facing residues (P2, P3, P5, P7, P8),
+    and checks how frequently that motif appears in the human proteome.
+
+    Higher frequency = more self-like TCR surface = stronger engagement of
+    natural regulatory T cells selected on self-peptides in the thymus.
+
+    Returns a score in [0, 1] (percentile of the motif frequency).
+    Returns 0.5 (neutral) if no core data is available.
+
+    **Criterion 4** in ``docs/tolerogenic_criteria.md``.
+
+    References: De Groot et al. (2008) *Blood*; Moise et al. (2013)
+    *Human Vaccines & Immunotherapeutics*.
+    """
+    import numpy as np
+
+    rows = predictions_df[predictions_df["peptide"] == peptide]
+    if rows.empty or "core_peptide" not in predictions_df.columns:
+        return 0.5
+
+    try:
+        motif_counts, sorted_counts = _build_tcr_motif_index()
+    except FileNotFoundError:
+        return 0.5
+
+    cores = rows["core_peptide"].unique()
+    percentiles: list[float] = []
+
+    for core in cores:
+        if not isinstance(core, str) or len(core) != 9:
+            continue
+        motif = "".join(core[p] for p in _TCR_POSITIONS)
+        freq = motif_counts.get(motif, 0)
+        # Convert frequency to percentile
+        idx = np.searchsorted(sorted_counts, freq, side="right")
+        pct = idx / len(sorted_counts)
+        percentiles.append(pct)
+
+    if not percentiles:
+        return 0.5
+
+    return float(np.mean(percentiles))
 
 def _peptides_hash(peptides: list[str]) -> str:
     joined = "\n".join(peptides)
@@ -531,6 +627,7 @@ def score_all_peptides(
     gold_standard: list[dict[str, Any]],
     cache_dir: str | os.PathLike[str] = "data/processed",
     weights: dict[str, float] | None = None,
+    antigen_sequence: str | None = None,
 ) -> pd.DataFrame:
     """Score every peptide across all seven tolerogenic criteria.
 
@@ -559,16 +656,31 @@ def score_all_peptides(
     Returns
     -------
     DataFrame with columns: ``peptide``, ``mhc_zone``,
-    ``hla_promiscuity``, ``itp_proximity``, ``il10``, ``ifng``,
+    ``hla_promiscuity``, ``itp_proximity``, ``treg_tcr``, ``ifng``,
     ``solubility``, ``jmx``, ``bcell_risk``, ``composite_score``.
     Sorted descending by ``composite_score``.
     """
     if weights is None:
         weights = DEFAULT_WEIGHTS
 
-    # --- Batch API calls (once for all peptides) ---------------------------
-    il10_scores = score_il10_local(peptides, cache_dir=cache_dir)
+    # --- Batch calls (IFN-gamma only — Treg TCR is per-peptide) --------
     ifng_scores = score_ifng_epitope(peptides, cache_dir=cache_dir)
+
+    # --- Processing (cathepsin S cleavage likelihood) -----------------------
+    try:
+        from src.scoring.processing import score_processing
+        processing_available = True
+    except Exception:
+        processing_available = False
+
+    # Pre-compute all processing scores for percentile normalization
+    all_proc_scores: list[float] = []
+    if processing_available and antigen_sequence:
+        for pep in peptides:
+            s = score_processing(pep, antigen_sequence)
+            if s is not None:
+                all_proc_scores.append(s)
+        all_proc_scores.sort()
 
     # --- JMX proxy (import here to avoid circular imports) -----------------
     try:
@@ -583,13 +695,19 @@ def score_all_peptides(
         mhc = score_mhc_zone(pep, predictions_df)
         hla = score_hla_promiscuity(pep, predictions_df)
         itp = score_itp_proximity(pep, gold_standard)
-        il10 = il10_scores.get(pep, 0.5)
+        treg_tcr = score_treg_tcr_contact(pep, predictions_df)
         ifng = ifng_scores.get(pep, 0.5)
         sol = score_gravy(pep)
 
+        if processing_available and antigen_sequence:
+            from src.scoring.processing import score_processing_normalized
+            proc = score_processing_normalized(pep, antigen_sequence, all_proc_scores)
+        else:
+            proc = 0.5
+
         if jmx_available:
             jmx = score_jmx_proxy(pep)
-            bcell_risk, bcell_penalty = score_bcell_risk(pep)
+            bcell_risk, bcell_penalty = score_bcell_risk(pep, antigen_sequence=antigen_sequence)
         else:
             jmx = 0.5
             bcell_risk, bcell_penalty = False, 0.0
@@ -598,7 +716,7 @@ def score_all_peptides(
             weights["mhc_zone"] * mhc
             + weights["hla_promiscuity"] * hla
             + weights["itp_proximity"] * itp
-            + weights["il10"] * il10
+            + weights["treg_tcr"] * treg_tcr
             + weights["ifng"] * ifng
             + weights["solubility"] * sol
             + weights["jmx"] * jmx
@@ -609,10 +727,11 @@ def score_all_peptides(
             "mhc_zone": round(mhc, 4),
             "hla_promiscuity": round(hla, 4),
             "itp_proximity": round(itp, 4),
-            "il10": round(il10, 4),
+            "treg_tcr": round(treg_tcr, 4),
             "ifng": round(ifng, 4),
             "solubility": round(sol, 4),
             "jmx": round(jmx, 4),
+            "processing": round(proc, 4),
             "bcell_risk": bcell_risk,
             "composite_score": round(composite, 4),
         })
@@ -785,15 +904,32 @@ if __name__ == "__main__":
     antigen_gene = entry.get("name", primary_antigen)
     print(f"Primary antigen: {antigen_gene} ({primary_antigen}, {len(entry['sequence'])} aa)")
 
-    # 2. Load Phase 2 predictions
+    # 2. Load Phase 2 predictions (with core_peptide for Treg TCR scoring)
     pred_path = Path(f"data/processed/{disease_id}_top_binders.csv")
     if not pred_path.exists():
-        # Fallback for legacy ITP naming
         legacy = Path("data/processed/itgb3_top_binders.csv")
         if legacy.exists() and disease_id == "itp":
             pred_path = legacy
     predictions_df = pd.read_csv(pred_path)
-    print(f"Predictions: {len(predictions_df)} rows from {pred_path.name}")
+
+    # Enrich predictions with core_peptide from cached TSVs if missing
+    if "core_peptide" not in predictions_df.columns:
+        import glob
+        tsv_frames = []
+        for tsv in glob.glob("data/processed/HLA-*_netmhciipan_el_*.tsv"):
+            tsv_frames.append(pd.read_csv(tsv, sep="\t"))
+        if tsv_frames:
+            all_cached = pd.concat(tsv_frames, ignore_index=True)
+            # Merge core_peptide onto predictions by peptide + allele
+            if "core_peptide" in all_cached.columns:
+                merged = predictions_df.merge(
+                    all_cached[["peptide", "allele", "core_peptide"]].drop_duplicates(),
+                    on=["peptide", "allele"], how="left",
+                )
+                predictions_df = merged
+
+    print(f"Predictions: {len(predictions_df)} rows from {pred_path.name}"
+          f" (core_peptide: {'yes' if 'core_peptide' in predictions_df.columns else 'no'})")
 
     # 3. Load gold standard (with position verification)
     gs_path = Path(get_gold_standard_path(profile))
@@ -825,6 +961,7 @@ if __name__ == "__main__":
     print("Scoring all peptides ...")
     scores_df = score_all_peptides(
         peptides, predictions_df, gold_standard, cache_dir="data/processed",
+        antigen_sequence=entry["sequence"],
     )
     print(f"Done. {len(scores_df)} peptides scored.\n")
 
@@ -836,13 +973,13 @@ if __name__ == "__main__":
     print("Top 20 peptides by composite score:\n")
     display_cols = [
         "peptide", "mhc_zone", "hla_promiscuity", "itp_proximity",
-        "il10", "ifng", "solubility", "jmx", "composite_score",
+        "treg_tcr", "ifng", "solubility", "jmx", "composite_score",
     ]
     top20 = scores_df.head(20)[display_cols]
 
     header = (
         f"{'#':<4} {'Peptide':<18} {'MHC':>5} {'HLA':>5} {'ITP':>5} "
-        f"{'IL10':>5} {'IFNg':>5} {'Sol':>5} {'JMX':>5} {'Score':>6}"
+        f"{'Treg':>5} {'IFNg':>5} {'Sol':>5} {'JMX':>5} {'Score':>6}"
     )
     print(header)
     print("-" * len(header))
@@ -850,7 +987,7 @@ if __name__ == "__main__":
         print(
             f"{i:<4} {row['peptide']:<18} "
             f"{row['mhc_zone']:>5.2f} {row['hla_promiscuity']:>5.2f} "
-            f"{row['itp_proximity']:>5.2f} {row['il10']:>5.2f} "
+            f"{row['itp_proximity']:>5.2f} {row['treg_tcr']:>5.2f} "
             f"{row['ifng']:>5.2f} {row['solubility']:>5.2f} "
             f"{row['jmx']:>5.2f} {row['composite_score']:>6.3f}"
         )
